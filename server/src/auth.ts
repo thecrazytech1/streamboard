@@ -9,7 +9,7 @@ function config(): AuthConfig {
   if (cachedConfig) return cachedConfig;
 
   cachedConfig = {
-    clientId: process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID ?? "",
+    clientId: process.env.TWITCH_CLIENT_ID ?? "",
     allowed: new Set(
       (process.env.ALLOWED_USERS ?? "")
         .split(",")
