@@ -3,14 +3,11 @@
 import { useSyncExternalStore } from "react";
 
 type Props = {
-  
   channel: string;
 };
 
-
 const neverChanges = () => () => {};
 const getHostname = () => window.location.hostname;
-
 const getServerHostname = () => null;
 
 export default function TwitchPlayer({ channel }: Props) {
@@ -20,17 +17,23 @@ export default function TwitchPlayer({ channel }: Props) {
     getServerHostname,
   );
 
+  if (!parent) return null;
+
+  const params = new URLSearchParams({
+    channel,
+    parent,
+    autoplay: "true",
+    muted: "true",
+  });
+
   return (
     <div className="twitch-player">
-      {parent && (
-        <iframe
-          src={`https://player.twitch.tv/?channel=${encodeURIComponent(
-            channel,
-          )}&parent=${encodeURIComponent(parent)}&muted=true`}
-          title={`${channel} on Twitch`}
-          allowFullScreen
-        />
-      )}
+      <iframe
+        src={`https://player.twitch.tv/?${params.toString()}`}
+        title={`${channel} on Twitch`}
+        allow="autoplay; fullscreen"
+        allowFullScreen
+      />
     </div>
   );
 }

@@ -259,16 +259,17 @@ body:has(.emote-overlay) {
 }
 
 .twitch-player {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   background: #000;
 }
 
 .twitch-player iframe {
+  display: block;
   width: 100%;
   height: 100%;
-  border: none;
+  border: 0;
   pointer-events: none;
 }
 
