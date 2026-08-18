@@ -1,7 +1,6 @@
 "use client";
 
-const CLIENT_ID = "m0wdtofo92x9rpdx0kbhx7v9is5t6k";
-
+import { CLIENT_ID } from "../lib/twitch";
 const SCOPES = "user:read:moderated_channels";
 
 const TwitchLogin = () => {

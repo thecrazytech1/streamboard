@@ -9,7 +9,7 @@ function config(): AuthConfig {
   if (cachedConfig) return cachedConfig;
 
   cachedConfig = {
-    clientId: process.env.TWITCH_CLIENT_ID ?? "",
+    clientId: process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID ?? "",
     allowed: new Set(
       (process.env.ALLOWED_USERS ?? "")
         .split(",")
@@ -200,7 +200,7 @@ export function assertAuthConfig(): void {
 
   if (!clientId) {
     throw new Error(
-      `Missing required environment variable: TWITCH_CLIENT_ID. Refusing to ` +
+      `Missing required environment variable: NEXT_PUBLIC_TWITCH_CLIENT_ID. Refusing to ` +
       `start — every token would be rejected as minted for another app.`,
     );
   }

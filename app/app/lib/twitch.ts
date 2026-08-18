@@ -1,4 +1,4 @@
-export const CLIENT_ID = "m0wdtofo92x9rpdx0kbhx7v9is5t6k";
+export const CLIENT_ID = process.env.NEXT_PUBLIC_TWITCH_CLIENT_ID!;
 
 export type TwitchChannel = {
   id: string;
