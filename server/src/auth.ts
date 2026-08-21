@@ -135,13 +135,19 @@ async function moderatedChannels(
 }
 
 export type BoardAccess =
-  | { ok: true; via: "override" | "broadcaster" | "moderator" }
+  | { ok: true; via: "override" | "broadcaster" | "invited" | "moderator" }
   | { ok: false; reason: "unauthorised" | "scope" };
 
 export async function authoriseForBoard(
   identity: Identity,
   token: string,
   channelId: string,
+  /**
+   * Twitch ids the broadcaster invited to this board, on top of their mods.
+   * Passed in rather than looked up here so every "may they edit" rule stays in
+   * one place, in the order that matters.
+   */
+  invited: ReadonlySet<string> = new Set(),
 ): Promise<BoardAccess> {
   const { allowed } = config();
   if (
@@ -156,6 +162,11 @@ export async function authoriseForBoard(
   if (!channelId) return { ok: false, reason: "unauthorised" };
 
   if (identity.userId === channelId) return { ok: true, via: "broadcaster" };
+
+  // Ahead of the scope check and the Helix request: this list is the board's
+  // own, and somebody the streamer invited by hand shouldn't be turned away
+  // over a permission only needed to ask Twitch about moderators.
+  if (invited.has(identity.userId)) return { ok: true, via: "invited" };
 
   if (!identity.scopes.includes(MODERATED_CHANNELS_SCOPE)) {
     return { ok: false, reason: "scope" };

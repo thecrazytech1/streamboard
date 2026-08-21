@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { socket } from "../../utils/socket";
-import type { BoardItem, ItemTransform } from "@/types/board";
+import type { BoardItem, ItemTransform, TextEdit } from "@/types/board";
 
 
 function merge(
@@ -55,6 +55,32 @@ export function useBoardItems() {
       });
     };
 
+    const onEdited = (edits: TextEdit[]) => {
+      setItems((prev) => {
+        const touched = edits.filter(({ id }) => prev[id]);
+        if (touched.length === 0) return prev;
+
+        const next = { ...prev };
+        for (const { id, text, color } of touched) {
+          const item = next[id];
+          // `name` tracks the text for a text item — it's what the tooltip and
+          // the toolbar read, and the server keeps them in step too. A shape,
+          // which can also be recoloured, keeps the name it was placed with.
+          next[id] =
+            item.kind === "text"
+              ? { ...item, text, color, name: text }
+              : { ...item, color };
+        }
+        return next;
+      });
+    };
+
+    const onMuted = ({ id, muted }: { id: string; muted: boolean }) => {
+      setItems((prev) =>
+        prev[id] ? { ...prev, [id]: { ...prev[id], muted } } : prev,
+      );
+    };
+
     const onRemoved = (id: string) => {
       setItems((prev) => {
         if (!prev[id]) return prev;
@@ -78,6 +104,8 @@ export function useBoardItems() {
     socket.on("items:transformed", onBatchTransformed);
     socket.on("item:reordered", onReordered);
     socket.on("items:reordered", onBatchReordered);
+    socket.on("items:edited", onEdited);
+    socket.on("item:muted", onMuted);
     socket.on("item:removed", onRemoved);
     socket.on("items:removed", onBatchRemoved);
 
@@ -88,6 +116,8 @@ export function useBoardItems() {
       socket.off("items:transformed", onBatchTransformed);
       socket.off("item:reordered", onReordered);
       socket.off("items:reordered", onBatchReordered);
+      socket.off("items:edited", onEdited);
+      socket.off("item:muted", onMuted);
       socket.off("item:removed", onRemoved);
       socket.off("items:removed", onBatchRemoved);
     };

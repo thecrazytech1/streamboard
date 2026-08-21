@@ -77,6 +77,7 @@ export function centreOf(box: Rect): { x: number; y: number } {
 const carry = (item: BoardItem) => ({
   id: item.id,
   size: item.size,
+  aspect: item.aspect,
   rotation: item.rotation,
   flipX: item.flipX,
   flipY: item.flipY,
@@ -136,6 +137,8 @@ export function scaleRotateTransforms(
       x: clamp(x / WORLD_WIDTH, MIN_COORD, MAX_COORD),
       y: clamp(y / WORLD_HEIGHT, MIN_COORD, MAX_COORD),
       size: clamp(item.size * ratio, MIN_SIZE, maxSizeFor(item.kind)),
+      // Scaling is uniform, so the proportions ride along untouched.
+      aspect: item.aspect,
       rotation: normaliseRotation(item.rotation + deltaDegrees),
       flipX: item.flipX,
       flipY: item.flipY,
@@ -155,6 +158,7 @@ export function flipTransforms(
     x: axis === "x" ? 2 * pivot.x - item.x : item.x,
     y: axis === "y" ? 2 * pivot.y - item.y : item.y,
     size: item.size,
+    aspect: item.aspect,
     rotation: normaliseRotation(-item.rotation),
     flipX: axis === "x" ? !item.flipX : item.flipX,
     flipY: axis === "y" ? !item.flipY : item.flipY,
@@ -173,4 +177,39 @@ export function itemTransformCss(item: {
     `translate(-50%, -50%) rotate(${item.rotation}deg)` +
     (scaleX === 1 && scaleY === 1 ? "" : ` scale(${scaleX}, ${scaleY})`)
   );
+}
+
+/**
+ * Bounds on proportions, mirroring MIN/MAX_ASPECT on the server. A ratio beyond
+ * these divides the height into something kilometres tall on every client.
+ */
+export const MIN_ASPECT = 0.05;
+export const MAX_ASPECT = 20;
+
+/**
+ * Resizes one item to a given width and height in world pixels.
+ *
+ * Anchored on the item's centre, like scaling is: the position doesn't move, so
+ * a resize can't walk an item across the board. Both dimensions are clamped in
+ * their own right, and the aspect they imply is clamped again — which is what
+ * stops a 5120-wide item 24 tall from becoming a hairline.
+ *
+ * Text has no business here: its box comes from the font, not from `aspect`.
+ */
+export function resizeTransform(
+  item: BoardItem,
+  width: number,
+  height: number,
+): ItemTransform {
+  const limit = maxSizeFor(item.kind);
+  const clampedWidth = clamp(width, MIN_SIZE, limit);
+  const clampedHeight = clamp(height, MIN_SIZE, limit);
+
+  return {
+    ...carry(item),
+    x: item.x,
+    y: item.y,
+    size: clampedWidth,
+    aspect: clamp(clampedWidth / clampedHeight, MIN_ASPECT, MAX_ASPECT),
+  };
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MAX_PASTED_TEXT, readClipboard, type PastePayload } from "../lib/clipboard";
+import { EMBED_PROVIDERS, embedName } from "../lib/embeds";
 import { addImageByUrl, rememberImage, uploadImage } from "../lib/images";
 import type { DraggableItem } from "@/types/board";
 
@@ -65,6 +66,18 @@ export function usePasteToBoard({ token, board, onPlace }: Options) {
             kind: "text",
             text: payload.text.slice(0, MAX_PASTED_TEXT),
             color: PASTED_TEXT_COLOR,
+          });
+          return;
+        }
+
+        if (payload.kind === "embed") {
+          const { provider, embedId } = payload.embed;
+          drop({
+            kind: "embed",
+            provider,
+            embedId,
+            aspect: EMBED_PROVIDERS[provider].aspect,
+            name: embedName(provider, embedId),
           });
           return;
         }

@@ -11,20 +11,25 @@ import {
   WaSpinner,
 } from "@awesome.me/webawesome/dist/react";
 import BoardLayer from "./BoardLayer";
+import BoardShape from "./BoardShape";
 import EmotePicker from "./EmotePicker";
 import LayoutManager from "./LayoutManager";
 import Navbar from "./Navbar";
+import EditorManager from "./EditorManager";
 import OverlaySetup from "./OverlaySetup";
+import TextEditor from "./TextEditor";
 import TwitchPlayer from "./TwitchPlayer";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { useBoardItems } from "../hooks/useBoardItems";
 import { useBoardHistory } from "../hooks/useBoardHistory";
 import { useBoardLayouts } from "../hooks/useBoardLayouts";
+import { useBoardEditors } from "../hooks/useBoardEditors";
 import { useOverlayLink } from "../hooks/useOverlayLink";
 import { usePasteToBoard } from "../hooks/usePasteToBoard";
 import { emoteUrl } from "../lib/sevenTv";
 import { resolveImageSrc } from "../lib/images";
 import { itemBounds, overlaps, type Rect } from "../lib/selection";
+import { shapePreviewItem } from "../lib/shapes";
 import { CLIENT_ID, type TwitchChannel } from "../lib/twitch";
 import {
   screenToWorld,
@@ -58,8 +63,20 @@ const TEXT_SIZE = 64;
 const IMAGE_SIZE = 220;
 
 
+/**
+ * Width in world pixels for a freshly dropped embed. Wide enough to actually
+ * watch — three eighths of the frame — since a stream shrunk to emote size is
+ * just a smear.
+ */
+const EMBED_SIZE = 480;
+
+/** Width in world pixels for a freshly dropped shape. */
+const SHAPE_SIZE = 260;
+
 const dropSize = (item: DraggableItem): number => {
   if (item.kind === "text") return TEXT_SIZE;
+  if (item.kind === "embed") return EMBED_SIZE;
+  if (item.kind === "shape") return SHAPE_SIZE;
   return item.kind === "image" ? IMAGE_SIZE : EMOTE_SIZE;
 };
 
@@ -101,6 +118,11 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [layoutsOpen, setLayoutsOpen] = useState(false);
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [editorsOpen, setEditorsOpen] = useState(false);
+  /** The board's own editor list, plus how this client got in. */
+  const editors = useBoardEditors();
+  /** Which text item the editor is open on, by id. */
+  const [editingId, setEditingId] = useState<string | null>(null);
   
   const overlayLink = useOverlayLink(board);
 
@@ -192,6 +214,29 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
     };
   }, [user]);
 
+  /**
+   * A refusal the server chose to explain — placing a fifth embed, so far.
+   * Shown in the same pill a paste uses, since it's the same kind of report on
+   * something that just happened.
+   */
+  const [itemError, setItemError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onItemError = (message: string) => setItemError(String(message));
+
+    socket.on("item:error", onItemError);
+    return () => {
+      socket.off("item:error", onItemError);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!itemError) return;
+
+    const timer = setTimeout(() => setItemError(null), 6000);
+    return () => clearTimeout(timer);
+  }, [itemError]);
+
   useEffect(() => {
     const handleMove = (e: PointerEvent) => {
       socket.emit("cursor", {
@@ -218,8 +263,22 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         emoteId: item.kind === "emote" ? item.emoteId : "",
         text: item.kind === "text" ? item.text : "",
         src: item.kind === "image" ? item.src : "",
-        aspect: item.kind === "image" ? item.aspect : 1,
-        color: item.kind === "text" ? item.color : "#ffffff",
+        aspect:
+          item.kind === "image" ||
+          item.kind === "embed" ||
+          item.kind === "shape"
+            ? item.aspect
+            : 1,
+        provider: item.kind === "embed" ? item.provider : "",
+        embedId: item.kind === "embed" ? item.embedId : "",
+        // Silent on arrival. Unmuting is a deliberate act, done once it's placed.
+        muted: true,
+        color:
+          item.kind === "text" || item.kind === "shape"
+            ? item.color
+            : "#ffffff",
+        shape: item.kind === "shape" ? item.shape : "",
+        outline: item.kind === "shape" ? item.outline : false,
         name: item.kind === "text" ? item.text : item.name,
         x,
         y,
@@ -293,6 +352,22 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
     },
     [],
   );
+
+  /**
+   * No optimistic update: the draft lived in the dialog, so there's nothing on
+   * the board to keep in step until the server's echo arrives — and it also
+   * clamps and cleans the text, so its version is the one to render.
+   */
+  const handleSaveText = useCallback(
+    (id: string, text: string, color: string) => {
+      socket.emit("item:edit", { id, text, color });
+    },
+    [],
+  );
+
+  const handleMute = useCallback((id: string, muted: boolean) => {
+    socket.emit("item:mute", { id, muted });
+  }, []);
 
   const handleRemoveItems = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
@@ -463,6 +538,11 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         onOpenLayouts={() => setLayoutsOpen(true)}
         layoutCount={layouts.layouts.length}
         onOpenOverlay={() => setOverlayOpen(true)}
+        // Offered only to the broadcaster. The server refuses everyone else
+        // regardless — this just doesn't dangle a button that would fail.
+        onOpenEditors={
+          editors.canInvite ? () => setEditorsOpen(true) : undefined
+        }
       />
 
       <div
@@ -490,6 +570,8 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
             onLocalTransform={applyTransforms}
             onReorder={handleReorderItems}
             onRemove={handleRemoveItems}
+            onEditText={setEditingId}
+            onMute={handleMute}
           />
         </div>
       </div>
@@ -504,6 +586,12 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
             height: marquee.bottom - marquee.top,
           }}
         />
+      )}
+
+      {itemError && (
+        <div className="paste-status is-error" role="status">
+          {itemError}
+        </div>
       )}
 
       {pasteStatus && (
@@ -569,6 +657,26 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         onDelete={layouts.remove}
       />
 
+      <TextEditor
+        item={editingId ? (boardItems[editingId] ?? null) : null}
+        onClose={() => setEditingId(null)}
+        onSave={handleSaveText}
+      />
+
+      <EditorManager
+        open={editorsOpen}
+        onClose={() => {
+          setEditorsOpen(false);
+          editors.dismissError();
+        }}
+        channelName={channel.name}
+        invited={editors.invited}
+        error={editors.error}
+        token={token}
+        onAdd={editors.add}
+        onRemove={editors.remove}
+      />
+
       <OverlaySetup
         open={overlayOpen}
         onClose={() => setOverlayOpen(false)}
@@ -630,7 +738,47 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         </WaButton>
       </WaDrawer>
 
-      {carried && ghost && carried.kind !== "text" && (
+      {carried && ghost && carried.kind === "shape" && (
+        <span
+          className="item-ghost"
+          style={{
+            left: ghost.x,
+            top: ghost.y,
+            width: dropSize(carried) * view.zoom,
+            height: (dropSize(carried) / carried.aspect) * view.zoom,
+          }}
+        >
+          <BoardShape
+            item={shapePreviewItem({
+              shape: carried.shape,
+              color: carried.color,
+              outline: carried.outline,
+              aspect: carried.aspect,
+              size: dropSize(carried),
+            })}
+            width={dropSize(carried)}
+            height={dropSize(carried) / carried.aspect}
+          />
+        </span>
+      )}
+
+      {carried && ghost && carried.kind === "embed" && (
+        <span
+          className="item-ghost embed-ghost"
+          style={{
+            left: ghost.x,
+            top: ghost.y,
+            width: dropSize(carried) * view.zoom,
+            height: (dropSize(carried) / carried.aspect) * view.zoom,
+          }}
+        >
+          {carried.name}
+        </span>
+      )}
+
+      {carried &&
+        ghost &&
+        (carried.kind === "emote" || carried.kind === "image") && (
         <img
           className="item-ghost"
           src={

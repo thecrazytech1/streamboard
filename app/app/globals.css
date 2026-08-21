@@ -728,3 +728,212 @@ wa-dialog::part(close-button__base):hover {
   font-weight: 800;
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
+.text-editor {
+  --width: 26rem;
+}
+
+.text-editor-swatches {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* The board's own treatment, so picking a colour previews rather than guesses.
+   Size is deliberately not matched — a 700px line wouldn't fit in a dialog. */
+.text-editor-preview {
+  margin-top: 1rem;
+  font-size: 1.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Embedded video ────────────────────────────────────────────────────────
+   An iframe per item. The iframe itself takes no pointer events and a shim sits
+   over it on the board, so dragging the item never turns into clicking into
+   someone else's player. The overlay renders no shim — nothing there is
+   clickable anyway.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.board-embed {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  border-radius: 2px;
+}
+
+.board-embed iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+}
+
+.board-embed-shim {
+  position: absolute;
+  inset: 0;
+}
+
+/* A provider this build doesn't know, or an id that no longer validates. Says
+   so on the board rather than rendering an empty black box. */
+.board-embed-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0.5rem;
+  border: 1px dashed #3a3a3d;
+  border-radius: 2px;
+  background: #18181b;
+  color: #efeff1;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* The drawer's draggable chip, and the box that follows the cursor. No iframe
+   for either: loading a video for something not placed yet is wasted decode. */
+.embed-chip,
+.embed-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem;
+  border: 1px solid #3a3a3d;
+  border-radius: 0.5rem;
+  background: #000;
+  color: #efeff1;
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.embed-chip {
+  cursor: grab;
+  touch-action: none;
+  min-height: 4rem;
+}
+
+.embed-chip:active {
+  cursor: grabbing;
+}
+
+.embed-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+/* ─── Shapes ────────────────────────────────────────────────────────────────
+   Inline SVG, filling the item's box. The viewBox is in world units, so stroke
+   widths scale with the board like everything else — see lib/shapes.ts.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.board-shape {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* The drawer tile: same drawing, small and square. */
+.shape-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0.25rem;
+  border-radius: 0.5rem;
+  cursor: grab;
+  touch-action: none;
+  transition: background-color 120ms;
+}
+
+.shape-tile:hover {
+  background-color: rgb(255 255 255 / 0.08);
+}
+
+.shape-tile:active {
+  cursor: grabbing;
+}
+
+.shape-preview {
+  display: block;
+  width: 48px;
+  height: 48px;
+}
+
+/* ─── Per-axis resize handles ───────────────────────────────────────────────
+   Middle of the right and bottom edges, sharing .item-handle's look but each
+   anchored to its own edge with a cursor that says which way it goes. The
+   corner handle keeps rotate-and-scale; these change one dimension.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.item-handle.is-east {
+  right: 0;
+  bottom: auto;
+  top: 50%;
+  transform-origin: right center;
+  cursor: ew-resize;
+}
+
+.item-handle.is-south {
+  right: auto;
+  left: 50%;
+  bottom: 0;
+  transform-origin: center bottom;
+  cursor: ns-resize;
+}
+
+/* ─── Who can edit this board ───────────────────────────────────────────────
+   The invite list, on top of the channel's Twitch moderators.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.editor-manager {
+  --width: 28rem;
+}
+
+.editor-manager-add {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1rem 0 0.75rem;
+}
+
+.editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.editor-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #3a3a3d;
+  border-radius: 0.5rem;
+  background: #0e0e10;
+}
+
+.editor-list-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.editor-manager-note {
+  margin-top: 1rem;
+  font-size: 0.8125rem;
+  opacity: 0.6;
+}

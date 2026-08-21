@@ -28,6 +28,8 @@ type Props = {
   layoutCount: number;
   
   onOpenOverlay: () => void;
+  /** Absent for anyone who can't change the board's editor list. */
+  onOpenEditors?: () => void;
 };
 
 export default function Navbar({
@@ -46,6 +48,7 @@ export default function Navbar({
   onOpenLayouts,
   layoutCount,
   onOpenOverlay,
+  onOpenEditors,
 }: Props) {
   return (
     <nav className="app-navbar">
@@ -97,6 +100,16 @@ export default function Navbar({
         >
           OBS
         </WaButton>
+        {onOpenEditors && (
+          <WaButton
+            size="small"
+            appearance="plain"
+            onClick={onOpenEditors}
+            title="Choose who can edit this board"
+          >
+            People
+          </WaButton>
+        )}
       </div>
 
       <div className="app-navbar-group" aria-label="Canvas zoom">

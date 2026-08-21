@@ -63,11 +63,14 @@ export function itemWidth(item: Sized): number {
 }
 
 export function itemHeight(item: Sized): number {
-  if (item.kind === "image") {
-    const aspect = item.aspect && item.aspect > 0 ? item.aspect : 1;
-    return item.size / aspect;
-  }
-  return item.size;
+  // Text is the exception: its box comes from the font and its content, so
+  // `size` is a font size and there's no aspect to divide by. Everything else
+  // — pictures, embeds, shapes, and a stretched emote — is `size` wide by
+  // whatever its aspect makes it.
+  if (item.kind === "text") return item.size;
+
+  const aspect = item.aspect && item.aspect > 0 ? item.aspect : 1;
+  return item.size / aspect;
 }
 
 export function isOnStream(

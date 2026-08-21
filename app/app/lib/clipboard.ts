@@ -1,6 +1,10 @@
+import { parseEmbed, type Embed } from "./embeds";
+
 export type PastePayload =
   | { kind: "file"; file: File }
   | { kind: "url"; url: string }
+  /** A link to a stream or clip we can embed, recognised before the image try. */
+  | { kind: "embed"; embed: Embed }
   | { kind: "text"; text: string };
 
 export const MAX_PASTED_TEXT = 100;
@@ -45,7 +49,13 @@ export function readClipboard(data: DataTransfer | null): PastePayload | null {
   if (embedded) return { kind: "url", url: embedded };
 
   const pastedUrl = text && httpUrl(text);
-  if (pastedUrl) return { kind: "url", url: pastedUrl };
+  if (pastedUrl) {
+    // Checked before treating it as an image: a twitch.tv link would otherwise
+    // fail to decode and come back as "that link isn't an image".
+    const embed = parseEmbed(pastedUrl);
+    if (embed) return { kind: "embed", embed };
+    return { kind: "url", url: pastedUrl };
+  }
 
   return text ? { kind: "text", text } : null;
 }
