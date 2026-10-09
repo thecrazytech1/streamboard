@@ -3,8 +3,10 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { socket } from "../../utils/socket";
 import { emoteUrl } from "../lib/sevenTv";
+import BoardCamera from "./BoardCamera";
 import BoardShape from "./BoardShape";
 import { embedUrl } from "../lib/embeds";
+import { filterClipPath, filterCss } from "../lib/filters";
 import { resolveImageSrc } from "../lib/images";
 import {
   centreOf,
@@ -443,6 +445,27 @@ export default function BoardLayer({
               <span className="board-text">{item.text}</span>
             ) : item.kind === "embed" ? (
               <BoardEmbed item={item} interactive={!readOnly} />
+            ) : item.kind === "camera" ? (
+              // `readOnly` is true only on the overlay, which is exactly where
+              // the camera should be opened and nowhere else.
+              <BoardCamera
+                device={item.device}
+                name={item.name}
+                live={readOnly}
+              />
+            ) : item.kind === "filter" ? (
+              <div
+                className="board-filter"
+                style={{
+                  // backdrop-filter reaches the page's own backdrop: board
+                  // items stacked below this one, and the stream player behind
+                  // the frame while editing. Not anything OBS puts under the
+                  // browser source — the page can't see those pixels.
+                  backdropFilter:
+                    filterCss(item.filter, item.strength) ?? undefined,
+                  clipPath: filterClipPath(item.shape),
+                }}
+              />
             ) : item.kind === "shape" ? (
               <BoardShape
                 item={item}

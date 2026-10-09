@@ -50,6 +50,11 @@ import {
   type ShapeKind,
 } from "../lib/shapes";
 import BoardShape from "./BoardShape";
+import {
+  FILTER_KINDS,
+  FILTER_SHAPES,
+  FILTERS,
+} from "../lib/filters";
 import type { DraggableItem } from "@/types/board";
 
 type Props = {
@@ -345,6 +350,143 @@ function ShapePreview({
         height={48}
       />
     </span>
+  );
+}
+
+/**
+ * Filters: a region that alters whatever is stacked beneath it.
+ *
+ * Worth knowing while placing one — it affects board items below it in the
+ * stacking order, so Front/Back decides what it catches. It does not reach
+ * whatever OBS composites under the browser source.
+ */
+function FilterPanel({ onPickUp }: { onPickUp: Props["onPickUp"] }) {
+  const [shape, setShape] = useState<string>("rect");
+  const [strength, setStrength] = useState(1);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        {FILTER_SHAPES.map((option) => (
+          <WaButton
+            key={option}
+            size="small"
+            appearance={shape === option ? "filled" : "outlined"}
+            onClick={() => setShape(option)}
+          >
+            {SHAPES[option as ShapeKind].label}
+          </WaButton>
+        ))}
+      </div>
+
+      <label className="filter-strength">
+        <span className="overlay-setup-label">
+          Strength — {Math.round(strength * 100)}%
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(strength * 100)}
+          onChange={(event) => setStrength(Number(event.target.value) / 100)}
+        />
+      </label>
+
+      <p className="text-xs opacity-60">Drag one onto the canvas:</p>
+
+      <div className="grid grid-cols-2 gap-1">
+        {FILTER_KINDS.map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            className="filter-tile"
+            title={FILTERS[kind].hint}
+            onPointerDown={(event) =>
+              onPickUp(
+                {
+                  kind: "filter",
+                  filter: kind,
+                  // The slider is the override; each filter's own default is
+                  // what reads well for that effect.
+                  strength: strength,
+                  shape,
+                  aspect: 1,
+                  name: FILTERS[kind].label,
+                },
+                event,
+              )
+            }
+          >
+            <span className="filter-tile-name">{FILTERS[kind].label}</span>
+            <span className="filter-tile-hint">{FILTERS[kind].hint}</span>
+          </button>
+        ))}
+      </div>
+
+      <p className="text-xs opacity-60">
+        A filter affects board items stacked below it — use Front and Back to
+        choose what it catches. It can&apos;t reach anything OBS puts under the
+        browser source, like a camera on its own layer.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The webcam, as a board item.
+ *
+ * The name is matched on the machine running the overlay, which is why this is
+ * a free-text box rather than a list of devices: the cameras attached to
+ * whatever you're editing from are not the ones that matter.
+ */
+function CameraPanel({ onPickUp }: { onPickUp: Props["onPickUp"] }) {
+  const [device, setDevice] = useState("");
+
+  return (
+    <div className="flex flex-col gap-3">
+      <WaInput
+        placeholder="Camera name, or leave blank for the first one"
+        value={device}
+        withClear
+        onInput={(event) => setDevice(event.currentTarget.value ?? "")}
+      />
+
+      <p className="text-xs opacity-60">Drag onto the canvas:</p>
+
+      <button
+        type="button"
+        className="embed-chip"
+        onPointerDown={(event) =>
+          onPickUp(
+            {
+              kind: "camera",
+              device: device.trim(),
+              aspect: 16 / 9,
+              name: device.trim() || "Camera",
+            },
+            event,
+          )
+        }
+      >
+        {device.trim() || "Camera"}
+      </button>
+
+      <ul className="embed-hints">
+        <li>
+          The picture only appears on the overlay — here it&apos;s a
+          placeholder, so position and filter it, then check OBS.
+        </li>
+        <li>
+          OBS must be started with{" "}
+          <code>--use-fake-ui-for-media-stream</code>, or the browser source is
+          refused the camera without asking.
+        </li>
+        <li>
+          Nothing else can hold the camera at the same time — not an OBS source,
+          not another tab.
+        </li>
+      </ul>
+    </div>
   );
 }
 
@@ -655,7 +797,9 @@ export default function EmotePicker({
       <WaTab panel="images">Images</WaTab>
       <WaTab panel="text">Text</WaTab>
       <WaTab panel="shapes">Shapes</WaTab>
+      <WaTab panel="filters">Filters</WaTab>
       <WaTab panel="embeds">Streams</WaTab>
+      <WaTab panel="camera">Camera</WaTab>
 
       <WaTabPanel name="global">
         <EmoteGrid
@@ -707,8 +851,16 @@ export default function EmotePicker({
         <ShapePanel onPickUp={onPickUp} />
       </WaTabPanel>
 
+      <WaTabPanel name="filters">
+        <FilterPanel onPickUp={onPickUp} />
+      </WaTabPanel>
+
       <WaTabPanel name="embeds">
         <EmbedPanel onPickUp={onPickUp} />
+      </WaTabPanel>
+
+      <WaTabPanel name="camera">
+        <CameraPanel onPickUp={onPickUp} />
       </WaTabPanel>
     </WaTabGroup>
   );

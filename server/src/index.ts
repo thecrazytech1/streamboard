@@ -151,7 +151,14 @@ const io = new Server(httpServer, {
 
 type Identity = { username: string; color: string };
 
-type BoardItemKind = "emote" | "text" | "image" | "embed" | "shape";
+type BoardItemKind =
+  | "emote"
+  | "text"
+  | "image"
+  | "embed"
+  | "shape"
+  | "filter"
+  | "camera";
 
 type BoardItem = {
   id: string;
@@ -181,6 +188,21 @@ type BoardItem = {
   shape: string;
   /** Outline rather than filled. Ignored for shapes that are only a stroke. */
   outline: boolean;
+
+  /**
+   * A filter item alters whatever is painted beneath it. `filter` names which
+   * one and `strength` is 0..1; the region comes from `shape`, like a shape
+   * item's does. Empty for every other kind.
+   */
+  filter: string;
+  strength: number;
+
+  /**
+   * Which camera a camera item shows, matched against the device names on the
+   * machine running the overlay. Empty means whichever camera that machine
+   * offers first. Only the overlay ever opens it — see BoardCamera.
+   */
+  device: string;
 
   color: string;
   name: string;
@@ -223,6 +245,8 @@ const KINDS: readonly BoardItemKind[] = [
   "image",
   "embed",
   "shape",
+  "filter",
+  "camera",
 ];
 
 const readKind = (value: unknown): BoardItemKind =>
@@ -347,6 +371,42 @@ const SHAPE_KINDS: readonly string[] = [
   "star",
 ];
 
+/** Mirrors FILTERS in app/app/lib/filters.ts. */
+const FILTER_KINDS: readonly string[] = [
+  "grayscale",
+  "blur",
+  "sepia",
+  "invert",
+  "saturate",
+  "hue-rotate",
+  "brightness",
+  "contrast",
+];
+
+/**
+ * A board holds one camera. The device can only be opened by one consumer at a
+ * time, so a second item would be a box that never fills in.
+ */
+const MAX_CAMERAS = 1;
+
+/** Only the shapes that enclose an area; a filter shaped like a line is nothing. */
+const FILTER_SHAPES: readonly string[] = ["rect", "ellipse", "triangle", "star"];
+
+const readFilter = (value: unknown): string => {
+  const name = String(value ?? "");
+  return FILTER_KINDS.includes(name) ? name : "";
+};
+
+/**
+ * 0..1, and never NaN: this multiplies into a CSS length on every client, and a
+ * missing value should read as "full" rather than as nothing at all.
+ */
+const clampStrength = (value: unknown): number => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(1, Math.max(0, n));
+};
+
 const readShape = (value: unknown): string => {
   const name = String(value ?? "");
   return SHAPE_KINDS.includes(name) ? name : "";
@@ -361,9 +421,9 @@ const readEmbed = (
   return EMBED_PROVIDERS[name]?.test(id) ? { provider: name, embedId: id } : null;
 };
 
-const countEmbeds = (board: Board): number => {
+const countKind = (board: Board, kind: BoardItemKind): number => {
   let total = 0;
-  for (const item of board.items.values()) if (item.kind === "embed") total += 1;
+  for (const item of board.items.values()) if (item.kind === kind) total += 1;
   return total;
 };
 
@@ -666,8 +726,18 @@ function readItem(row: unknown, fallbackZ: number): BoardItem | null {
   if (kind === "image" && !src) return null;
   if (kind === "embed" && !embed) return null;
 
-  const shape = kind === "shape" ? readShape(raw?.shape) : "";
+  const shape =
+    kind === "shape"
+      ? readShape(raw?.shape)
+      : kind === "filter"
+        ? (FILTER_SHAPES.includes(String(raw?.shape ?? "")) &&
+            String(raw?.shape)) ||
+          "rect"
+        : "";
   if (kind === "shape" && !shape) return null;
+
+  const filter = kind === "filter" ? readFilter(raw?.filter) : "";
+  if (kind === "filter" && !filter) return null;
 
   const z = Number(raw?.z);
 
@@ -677,15 +747,15 @@ function readItem(row: unknown, fallbackZ: number): BoardItem | null {
     emoteId: kind === "emote" ? emoteId : "",
     text: kind === "text" ? text : "",
     src: kind === "image" ? src : "",
-    aspect:
-      kind === "image" || kind === "embed" || kind === "shape"
-        ? clampAspect(raw?.aspect)
-        : 1,
+    aspect: kind === "emote" || kind === "text" ? 1 : clampAspect(raw?.aspect),
     provider: embed?.provider ?? "",
     embedId: embed?.embedId ?? "",
     muted: kind === "embed" ? raw?.muted !== false : true,
     shape,
     outline: kind === "shape" && raw?.outline === true,
+    filter,
+    strength: kind === "filter" ? clampStrength(raw?.strength) : 1,
+    device: kind === "camera" ? cleanText(raw?.device).slice(0, 80) : "",
     color: cleanColour(raw?.color),
     name: String(raw?.name ?? "").slice(0, 64),
     x: clampFraction(raw?.x),
@@ -1138,13 +1208,35 @@ io.on("connection", (socket) => {
     if (kind === "image" && !src) return;
     if (kind === "embed" && !embed) return;
 
-    const shape = kind === "shape" ? readShape(data?.shape) : "";
+    const shape =
+      kind === "shape"
+        ? readShape(data?.shape)
+        : kind === "filter"
+          ? // A filter's region reuses the shape vocabulary, narrowed to the
+            // shapes that enclose an area, and falls back to a rectangle.
+            (FILTER_SHAPES.includes(String(data?.shape ?? "")) &&
+              String(data?.shape)) ||
+            "rect"
+          : "";
     if (kind === "shape" && !shape) return;
+
+    const filter = kind === "filter" ? readFilter(data?.filter) : "";
+    if (kind === "filter" && !filter) return;
+
+    // Refused rather than evicting, like an embed: the limit is about the
+    // device, not about room on the board.
+    if (kind === "camera" && countKind(board, "camera") >= MAX_CAMERAS) {
+      socket.emit(
+        "item:error",
+        "A board can hold one camera. Remove the other one first.",
+      );
+      return;
+    }
 
     // Refused rather than evicting something, unlike the item cap below: the
     // limit is about how much video a browser source can decode, and quietly
     // swapping which stream is on screen would be worse than not adding one.
-    if (kind === "embed" && countEmbeds(board) >= MAX_EMBEDS) {
+    if (kind === "embed" && countKind(board, "embed") >= MAX_EMBEDS) {
       socket.emit(
         "item:error",
         `A board can hold ${MAX_EMBEDS} embedded streams. Remove one first.`,
@@ -1169,9 +1261,7 @@ io.on("connection", (socket) => {
       text: kind === "text" ? text : "",
       src: kind === "image" ? src : "",
       aspect:
-        kind === "image" || kind === "embed" || kind === "shape"
-          ? clampAspect(data?.aspect)
-          : 1,
+        kind === "emote" || kind === "text" ? 1 : clampAspect(data?.aspect),
       provider: embed?.provider ?? "",
       embedId: embed?.embedId ?? "",
       // Muted unless someone deliberately unmutes it: an embed that arrives
@@ -1179,6 +1269,11 @@ io.on("connection", (socket) => {
       muted: kind === "embed" ? data?.muted !== false : true,
       shape,
       outline: kind === "shape" && data?.outline === true,
+      filter,
+      strength: kind === "filter" ? clampStrength(data?.strength) : 1,
+      // A plain name to match on, never a path or a url — the overlay only
+      // compares it against what its own machine reports.
+      device: kind === "camera" ? cleanText(data?.device).slice(0, 80) : "",
       color: cleanColour(data?.color),
       name: (kind === "text" ? text : String(data?.name ?? "")).slice(0, 64),
       x: clampFraction(data?.x),

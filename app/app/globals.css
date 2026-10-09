@@ -937,3 +937,112 @@ wa-dialog::part(close-button__base):hover {
   font-size: 0.8125rem;
   opacity: 0.6;
 }
+
+/* ─── Filter items ──────────────────────────────────────────────────────────
+   A region that alters what's painted beneath it. The filter itself is set
+   inline, since it comes from the item; this is only the box it applies over.
+
+   Worth knowing: `backdrop-filter` filters the *page's* backdrop. On the
+   overlay that means other board items, not whatever OBS composites below the
+   browser source — the page never sees those pixels.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.board-filter {
+  width: 100%;
+  height: 100%;
+  /* Nothing of its own to paint: without this, a filter region would be an
+     invisible nothing on some engines and a black box on others. */
+  background: transparent;
+}
+
+/* Selected, it needs an edge — an unfilled region with a subtle effect is
+   otherwise impossible to find and grab. */
+.board-item.is-filter.is-selected .board-filter,
+.board-item.is-filter:hover .board-filter {
+  outline: 1px dashed rgb(145 70 255 / 0.9);
+  outline-offset: -1px;
+}
+
+/* The drawer's filter tiles, and the region that follows the cursor. */
+.filter-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--drawer-border);
+  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.03);
+  text-align: left;
+  cursor: grab;
+  touch-action: none;
+  transition: background-color 120ms;
+}
+
+.filter-tile:hover {
+  background-color: rgb(255 255 255 / 0.08);
+}
+
+.filter-tile:active {
+  cursor: grabbing;
+}
+
+.filter-tile-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.filter-tile-hint {
+  font-size: 0.625rem;
+  line-height: 1.3;
+  opacity: 0.6;
+}
+
+.filter-strength input[type="range"] {
+  width: 100%;
+  accent-color: #9146ff;
+}
+
+/* Dashed, because an empty region mid-drag is otherwise invisible. */
+.filter-ghost {
+  border: 1px dashed rgb(145 70 255 / 0.9);
+}
+
+/* ─── Camera items ──────────────────────────────────────────────────────────
+   The feed is only ever opened on the overlay; the board shows a placeholder.
+   See BoardCamera for why.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.board-camera {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Fills the item's box, cropping rather than letterboxing — the item's own
+     aspect is what decides the framing. */
+  object-fit: cover;
+  background: #000;
+}
+
+.board-camera-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  width: 100%;
+  height: 100%;
+  padding: 0.5rem;
+  border: 1px dashed #3a3a3d;
+  border-radius: 2px;
+  background: #18181b;
+  color: #efeff1;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.board-camera-placeholder small {
+  font-size: 0.6875rem;
+  font-weight: 400;
+  opacity: 0.6;
+}

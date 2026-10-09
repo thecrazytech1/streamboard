@@ -1,4 +1,11 @@
-export type BoardItemKind = "emote" | "text" | "image" | "embed" | "shape";
+export type BoardItemKind =
+  | "emote"
+  | "text"
+  | "image"
+  | "embed"
+  | "shape"
+  | "filter"
+  | "camera";
 
 export type BoardItem = {
 
@@ -28,6 +35,19 @@ export type BoardItem = {
   shape: string;
   /** Outline rather than filled. Ignored by shapes that are only a stroke. */
   outline: boolean;
+
+  /**
+   * A filter item alters what's painted beneath it: `filter` names which one,
+   * `strength` is 0..1, and `shape` gives the region. Empty for other kinds.
+   */
+  filter: string;
+  strength: number;
+
+  /**
+   * Which camera a camera item shows, matched against device names on the
+   * machine running the overlay. Empty means that machine's first camera.
+   */
+  device: string;
 
   color: string;
 
@@ -95,6 +115,15 @@ export type DraggableItem =
       color: string;
       aspect: number;
       outline: boolean;
+      name: string;
+    }
+  | { kind: "camera"; device: string; aspect: number; name: string }
+  | {
+      kind: "filter";
+      filter: string;
+      strength: number;
+      shape: string;
+      aspect: number;
       name: string;
     }
   | {

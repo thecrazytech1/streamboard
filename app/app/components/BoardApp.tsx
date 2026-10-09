@@ -29,6 +29,7 @@ import { usePasteToBoard } from "../hooks/usePasteToBoard";
 import { emoteUrl } from "../lib/sevenTv";
 import { resolveImageSrc } from "../lib/images";
 import { itemBounds, overlaps, type Rect } from "../lib/selection";
+import { filterClipPath, filterCss } from "../lib/filters";
 import { shapePreviewItem } from "../lib/shapes";
 import { CLIENT_ID, type TwitchChannel } from "../lib/twitch";
 import {
@@ -75,7 +76,11 @@ const SHAPE_SIZE = 260;
 
 const dropSize = (item: DraggableItem): number => {
   if (item.kind === "text") return TEXT_SIZE;
-  if (item.kind === "embed") return EMBED_SIZE;
+  // A camera is a video feed like an embed, and wants the same room.
+  if (item.kind === "embed" || item.kind === "camera") return EMBED_SIZE;
+  // A filter is a region to cover things with, so it starts larger than a
+  // shape — a quarter of the frame rather than a fifth.
+  if (item.kind === "filter") return 320;
   if (item.kind === "shape") return SHAPE_SIZE;
   return item.kind === "image" ? IMAGE_SIZE : EMOTE_SIZE;
 };
@@ -264,11 +269,7 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         text: item.kind === "text" ? item.text : "",
         src: item.kind === "image" ? item.src : "",
         aspect:
-          item.kind === "image" ||
-          item.kind === "embed" ||
-          item.kind === "shape"
-            ? item.aspect
-            : 1,
+          item.kind === "emote" || item.kind === "text" ? 1 : item.aspect,
         provider: item.kind === "embed" ? item.provider : "",
         embedId: item.kind === "embed" ? item.embedId : "",
         // Silent on arrival. Unmuting is a deliberate act, done once it's placed.
@@ -277,8 +278,12 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
           item.kind === "text" || item.kind === "shape"
             ? item.color
             : "#ffffff",
-        shape: item.kind === "shape" ? item.shape : "",
+        shape:
+          item.kind === "shape" || item.kind === "filter" ? item.shape : "",
         outline: item.kind === "shape" ? item.outline : false,
+        device: item.kind === "camera" ? item.device : "",
+        filter: item.kind === "filter" ? item.filter : "",
+        strength: item.kind === "filter" ? item.strength : 1,
         name: item.kind === "text" ? item.text : item.name,
         x,
         y,
@@ -738,6 +743,23 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         </WaButton>
       </WaDrawer>
 
+      {carried && ghost && carried.kind === "filter" && (
+        <span
+          className="item-ghost filter-ghost"
+          style={{
+            left: ghost.x,
+            top: ghost.y,
+            width: dropSize(carried) * view.zoom,
+            height: (dropSize(carried) / carried.aspect) * view.zoom,
+            // Filtering live while it's dragged, so you can see what it catches
+            // before letting go.
+            backdropFilter:
+              filterCss(carried.filter, carried.strength) ?? undefined,
+            clipPath: filterClipPath(carried.shape),
+          }}
+        />
+      )}
+
       {carried && ghost && carried.kind === "shape" && (
         <span
           className="item-ghost"
@@ -759,6 +781,20 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
             width={dropSize(carried)}
             height={dropSize(carried) / carried.aspect}
           />
+        </span>
+      )}
+
+      {carried && ghost && carried.kind === "camera" && (
+        <span
+          className="item-ghost embed-ghost"
+          style={{
+            left: ghost.x,
+            top: ghost.y,
+            width: dropSize(carried) * view.zoom,
+            height: (dropSize(carried) / carried.aspect) * view.zoom,
+          }}
+        >
+          {carried.name}
         </span>
       )}
 
