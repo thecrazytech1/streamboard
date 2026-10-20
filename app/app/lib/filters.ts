@@ -88,10 +88,71 @@ export const isFilterKind = (value: string): value is FilterKind =>
   Object.prototype.hasOwnProperty.call(FILTERS, value);
 
 /** The `backdrop-filter` value for an item, or null if it isn't one we know. */
-export function filterCss(filter: string, strength: number): string | null {
-  if (!isFilterKind(filter)) return null;
-  const clamped = Math.min(1, Math.max(0, strength));
-  return FILTERS[filter].css(clamped);
+/** One effect in a filter item's chain. */
+export type FilterStep = { kind: FilterKind; strength: number };
+
+/**
+ * How many effects one filter may stack. Enough to build something; few enough
+ * that a chain stays readable in the editor and cheap to composite.
+ */
+export const MAX_FILTER_CHAIN = 6;
+
+const clampStrength = (value: number) =>
+  Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+
+/**
+ * Reads an item's chain.
+ *
+ * Stored in the item's existing `filter` field as `name:strength` pairs joined
+ * by pipes — "grayscale:1|contrast:0.4" — rather than in a new field, so an
+ * item that predates stacking still means what it meant. Those have a bare
+ * name and carry their amount in `strength`, which is what the second argument
+ * is for; nothing written since reads it.
+ */
+export function parseChain(
+  filter: string,
+  legacyStrength = 1,
+): FilterStep[] {
+  if (!filter) return [];
+
+  return filter
+    .split("|")
+    .slice(0, MAX_FILTER_CHAIN)
+    .flatMap((part) => {
+      const [name, amount] = part.split(":");
+      if (!isFilterKind(name)) return [];
+
+      return [
+        {
+          kind: name,
+          strength:
+            amount === undefined
+              ? clampStrength(legacyStrength)
+              : clampStrength(Number(amount)),
+        },
+      ];
+    });
+}
+
+/** The stored form. Rounded, because a slider produces long fractions. */
+export function serialiseChain(chain: readonly FilterStep[]): string {
+  return chain
+    .slice(0, MAX_FILTER_CHAIN)
+    .map((step) => `${step.kind}:${clampStrength(step.strength).toFixed(3)}`)
+    .join("|");
+}
+
+/**
+ * The `backdrop-filter` value for a chain: every effect in order, applied in
+ * one pass. Null when there's nothing to apply, so the caller can leave the
+ * property off entirely rather than setting it to something meaningless.
+ */
+export function chainCss(chain: readonly FilterStep[]): string | null {
+  if (chain.length === 0) return null;
+
+  return chain
+    .map((step) => FILTERS[step.kind].css(clampStrength(step.strength)))
+    .join(" ");
 }
 
 /**

@@ -7,8 +7,11 @@ type Props = {
   open: boolean;
   onClose: () => void;
   channelName: string;
-  
+
   link: string | null;
+  /** How many OBS sources are connected to this board right now. */
+  overlays: number;
+  onReload: () => void;
 };
 
 
@@ -19,6 +22,8 @@ export default function OverlaySetup({
   onClose,
   channelName,
   link,
+  overlays,
+  onReload,
 }: Props) {
   const [copied, setCopied] = useState(false);
 
@@ -93,6 +98,27 @@ export default function OverlaySetup({
           Waiting for the board server to send this board&apos;s key…
         </p>
       )}
+
+      <div className="overlay-setup-status">
+        <span className={overlays > 0 ? "is-live" : undefined}>
+          {overlays > 0
+            ? `${overlays} browser source${overlays === 1 ? "" : "s"} connected`
+            : "No browser source connected"}
+        </span>
+
+        {/* Saves walking to the streaming machine after shipping a change. It
+            can only reach a source whose connection is alive — a page broken
+            badly enough to have dropped it still needs OBS's own Refresh. */}
+        <WaButton
+          size="small"
+          appearance="outlined"
+          disabled={overlays === 0}
+          onClick={onReload}
+          title="Reload every connected browser source"
+        >
+          Reload
+        </WaButton>
+      </div>
 
       <WaButton slot="footer" appearance="outlined" onClick={onClose}>
         Done

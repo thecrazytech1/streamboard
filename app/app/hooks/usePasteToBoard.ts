@@ -12,6 +12,13 @@ const PASTED_TEXT_COLOR = "#ffffff";
 
 const ERROR_MS = 6000;
 
+/**
+ * How long after a middle click a paste is taken to have come from it. The
+ * paste follows the release almost immediately; this only has to outlast that
+ * and fall short of somebody middle-clicking and then reaching for ctrl+V.
+ */
+const MIDDLE_CLICK_PASTE_MS = 500;
+
 export type PasteStatus =
   | { kind: "busy"; message: string }
   | { kind: "error"; message: string }
@@ -32,6 +39,16 @@ export function usePasteToBoard({ token, board, onPlace }: Options) {
 
   const pointer = useRef<{ x: number; y: number } | null>(null);
 
+  /**
+   * When the middle button was last pressed.
+   *
+   * On Linux, middle-clicking pastes the primary selection and the browser
+   * raises a real paste event for it — so panning the canvas with the middle
+   * button flings whatever text happened to be selected onto the board. Pastes
+   * that follow one of these are ignored.
+   */
+  const middleClick = useRef(0);
+
   const place = useRef(onPlace);
   useEffect(() => {
     place.current = onPlace;
@@ -42,8 +59,16 @@ export function usePasteToBoard({ token, board, onPlace }: Options) {
       pointer.current = { x: event.clientX, y: event.clientY };
     };
 
+    const onDown = (event: PointerEvent) => {
+      if (event.button === 1) middleClick.current = performance.now();
+    };
+
     window.addEventListener("pointermove", onMove);
-    return () => window.removeEventListener("pointermove", onMove);
+    window.addEventListener("pointerdown", onDown);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerdown", onDown);
+    };
   }, []);
 
 
@@ -127,6 +152,14 @@ export function usePasteToBoard({ token, board, onPlace }: Options) {
         target instanceof HTMLElement &&
         target.closest("input, textarea, wa-input, [contenteditable]")
       ) {
+        return;
+      }
+
+      // A middle click just happened, so this is the primary selection being
+      // pasted rather than somebody asking for it. Ignored here rather than
+      // suppressed outright: middle-click paste still works in a text field,
+      // where it's the behaviour people expect.
+      if (performance.now() - middleClick.current < MIDDLE_CLICK_PASTE_MS) {
         return;
       }
 

@@ -5,7 +5,8 @@ export type BoardItemKind =
   | "embed"
   | "shape"
   | "filter"
-  | "camera";
+  | "camera"
+  | "collider";
 
 export type BoardItem = {
 
@@ -49,6 +50,13 @@ export type BoardItem = {
    */
   device: string;
 
+  /**
+   * Left alone by physics. Pinned items are still collided with — a pinned
+   * shape is a shelf — but nothing the simulation does moves them. Filters,
+   * cameras and embeds are pinned when placed; everything else isn't.
+   */
+  pinned: boolean;
+
   color: string;
 
   name: string;
@@ -87,10 +95,16 @@ export type ItemTransform = {
  * What editing a placed text item can change. Narrow on purpose: an emote's id
  * and an image's src are what the item is, not how it reads.
  */
+/**
+ * What editing a placed item can change: a text item's words and colour, a
+ * shape's colour, a filter's chain. Narrow on purpose — an emote's id and an
+ * image's src are what those items are, not how they look.
+ */
 export type TextEdit = {
   id: string;
   text: string;
   color: string;
+  filter: string;
 };
 
 export type ReorderDirection = "front" | "back";
@@ -118,6 +132,7 @@ export type DraggableItem =
       name: string;
     }
   | { kind: "camera"; device: string; aspect: number; name: string }
+  | { kind: "collider"; shape: string; aspect: number; name: string }
   | {
       kind: "filter";
       filter: string;

@@ -158,7 +158,8 @@ type BoardItemKind =
   | "embed"
   | "shape"
   | "filter"
-  | "camera";
+  | "camera"
+  | "collider";
 
 type BoardItem = {
   id: string;
@@ -204,6 +205,17 @@ type BoardItem = {
    */
   device: string;
 
+  /**
+   * Left alone by physics. A pinned item is still part of the world — things
+   * collide with it, so a pinned shape makes a shelf — but nothing the
+   * simulation does ever moves it.
+   *
+   * Defaults by kind at placement: the furniture of a board (a filter region, a
+   * camera, an embedded stream) is pinned, and the things you throw around are
+   * not.
+   */
+  pinned: boolean;
+
   color: string;
   name: string;
   x: number;
@@ -247,6 +259,7 @@ const KINDS: readonly BoardItemKind[] = [
   "shape",
   "filter",
   "camera",
+  "collider",
 ];
 
 const readKind = (value: unknown): BoardItemKind =>
@@ -280,6 +293,18 @@ type Board = {
   histories: Map<string, History>;
 
   dirty: boolean;
+  /**
+   * How many editors have this board open. Transient, never persisted — it
+   * exists so the overlay knows whether anyone is there to see a camera
+   * preview, and can stay quiet when nobody is.
+   */
+  watchers: number;
+  /**
+   * How many OBS sources are connected. Transient like `watchers`, and worth
+   * knowing on the board: it's the difference between "the overlay will pick
+   * this up" and "nothing is listening".
+   */
+  overlays: number;
   itemsPath: string;
   layoutsPath: string;
   /** Where overlayKey and invited live. Rewritten whenever either changes. */
@@ -292,6 +317,13 @@ const boards = new Map<string, Board>();
  * Who the broadcaster has invited to a board, for the authorisation check. A
  * board nobody has opened yet has no list, which is the same as an empty one.
  */
+const announcePresence = (board: Board): void => {
+  io.to(board.room).emit("board:watchers", {
+    editors: board.watchers,
+    overlays: board.overlays,
+  });
+};
+
 const invitedIds = (boardId: string): ReadonlySet<string> =>
   new Set(boards.get(boardId)?.invited.keys() ?? []);
 const CHANNEL_ID_PATTERN = /^\d{1,20}$/;
@@ -389,12 +421,61 @@ const FILTER_KINDS: readonly string[] = [
  */
 const MAX_CAMERAS = 1;
 
+/**
+ * Camera previews: the overlay is the only thing that can open the camera, so
+ * it sends the board a small picture of what it sees. These are relayed and
+ * forgotten — never stored, never written to a snapshot, never sent to another
+ * overlay.
+ *
+ * The ceilings are there because this is the one path where a client sets the
+ * message size. A frame at the size the overlay sends is a couple of kilobytes;
+ * this leaves room for a bigger camera without leaving room for abuse.
+ */
+const MAX_PREVIEW_BYTES = 48 * 1024;
+const MIN_PREVIEW_INTERVAL_MS = 200;
+
 /** Only the shapes that enclose an area; a filter shaped like a line is nothing. */
 const FILTER_SHAPES: readonly string[] = ["rect", "ellipse", "triangle", "star"];
 
-const readFilter = (value: unknown): string => {
-  const name = String(value ?? "");
-  return FILTER_KINDS.includes(name) ? name : "";
+/**
+ * What a collider may be.
+ *
+ * A collider is an invisible obstacle: it draws nothing on the overlay and
+ * exists so items can land on and bounce off something that's on the stream but
+ * not on the board — a now-playing widget, a chat box, a camera on its own OBS
+ * layer. Rectangles and ellipses only, because those are the shapes that become
+ * an honest physics body; anything else would collide as its bounding box while
+ * being drawn as something else.
+ */
+const COLLIDER_SHAPES: readonly string[] = ["rect", "ellipse"];
+
+/** Matches MAX_FILTER_CHAIN in app/app/lib/filters.ts. */
+const MAX_FILTER_CHAIN = 6;
+
+/**
+ * A filter item's chain of effects, stored as `name:strength` pairs joined by
+ * pipes and normalised here so what's on disk is always well formed.
+ *
+ * A bare name with no amount is how single-effect filters were written before
+ * stacking existed; those keep their amount in the item's `strength`, so they
+ * read back unchanged.
+ */
+const readFilter = (value: unknown, legacyStrength: unknown): string => {
+  const raw = String(value ?? "");
+  if (!raw) return "";
+
+  const steps: string[] = [];
+
+  for (const part of raw.split("|").slice(0, MAX_FILTER_CHAIN)) {
+    const [name, amount] = part.split(":");
+    if (!FILTER_KINDS.includes(name)) continue;
+
+    const strength =
+      amount === undefined ? clampStrength(legacyStrength) : clampStrength(amount);
+    steps.push(`${name}:${strength.toFixed(3)}`);
+  }
+
+  return steps.join("|");
 };
 
 /**
@@ -406,6 +487,16 @@ const clampStrength = (value: unknown): number => {
   if (!Number.isFinite(n)) return 1;
   return Math.min(1, Math.max(0, n));
 };
+
+/** What a kind is when it's placed. Changeable afterwards, per item. */
+const pinnedByDefault = (kind: BoardItemKind): boolean =>
+  kind === "filter" ||
+  kind === "camera" ||
+  kind === "embed" ||
+  kind === "collider";
+
+/** A collider that fell over would be no kind of obstacle. */
+const alwaysPinned = (kind: BoardItemKind): boolean => kind === "collider";
 
 const readShape = (value: unknown): string => {
   const name = String(value ?? "");
@@ -509,12 +600,25 @@ function replaceBoard(board: Board, next: readonly BoardItem[]): BoardItem[] {
  * emote's id and an image's src decide what the item *is*, so changing those
  * would be replacing the item rather than editing it.
  */
-type TextEdit = { id: string; text: string; color: string };
+/**
+ * Everything an edit can change about an item that has a look of its own: a
+ * text item's words and colour, a shape's colour, a filter's chain of effects.
+ *
+ * Deliberately narrow: an emote's id and an image's src decide what the item
+ * *is*, so changing those would be replacing the item rather than editing it.
+ */
+type TextEdit = {
+  id: string;
+  text: string;
+  color: string;
+  filter: string;
+};
 
 const snapshotEdit = (item: BoardItem): TextEdit => ({
   id: item.id,
   text: item.text,
   color: item.color,
+  filter: item.filter,
 });
 
 const snapshotTransform = (item: BoardItem): ItemTransform => ({
@@ -654,6 +758,7 @@ function invert(board: Board, entry: UndoEntry): UndoEntry | null {
       before.push(snapshotEdit(item));
       item.text = target.text;
       item.color = target.color;
+      item.filter = target.filter;
       // The name is what the toolbar and the "placed by" tooltip show, and for
       // a text item it has always been the text itself. A shape keeps its own.
       if (item.kind === "text") item.name = target.text;
@@ -729,14 +834,18 @@ function readItem(row: unknown, fallbackZ: number): BoardItem | null {
   const shape =
     kind === "shape"
       ? readShape(raw?.shape)
-      : kind === "filter"
+      : kind === "collider"
+        ? (COLLIDER_SHAPES.includes(String(raw?.shape ?? "")) &&
+            String(raw?.shape)) ||
+          "rect"
+        : kind === "filter"
         ? (FILTER_SHAPES.includes(String(raw?.shape ?? "")) &&
             String(raw?.shape)) ||
           "rect"
         : "";
   if (kind === "shape" && !shape) return null;
 
-  const filter = kind === "filter" ? readFilter(raw?.filter) : "";
+  const filter = kind === "filter" ? readFilter(raw?.filter, raw?.strength) : "";
   if (kind === "filter" && !filter) return null;
 
   const z = Number(raw?.z);
@@ -756,6 +865,11 @@ function readItem(row: unknown, fallbackZ: number): BoardItem | null {
     filter,
     strength: kind === "filter" ? clampStrength(raw?.strength) : 1,
     device: kind === "camera" ? cleanText(raw?.device).slice(0, 80) : "",
+    // Snapshots written before pinning existed have no opinion, so the kind
+    // decides — which is what those items were effectively doing anyway.
+    pinned:
+      alwaysPinned(kind) ||
+      (typeof raw?.pinned === "boolean" ? raw.pinned : pinnedByDefault(kind)),
     color: cleanColour(raw?.color),
     name: String(raw?.name ?? "").slice(0, 64),
     x: clampFraction(raw?.x),
@@ -1006,6 +1120,8 @@ function openBoard(id: string): Board {
     positions: new Map(),
     histories: new Map(),
     dirty: false,
+    watchers: 0,
+    overlays: 0,
     itemsPath: paths.items,
     layoutsPath: paths.layouts,
     configPath: paths.config,
@@ -1149,6 +1265,37 @@ io.on("connection", (socket) => {
 
   socket.emit("item:sync", [...items.values()]);
 
+  if (role === "overlay") {
+    // The overlay holds the camera, so it's the only one that can show anyone
+    // else what the camera sees.
+    socket.on("camera:frame", (data) => {
+      const id = String(data?.id ?? "");
+      const frame = typeof data?.frame === "string" ? data.frame : "";
+
+      if (!id || !items.has(id)) return;
+      if (!frame.startsWith("data:image/") || frame.length > MAX_PREVIEW_BYTES) {
+        return;
+      }
+
+      const now = Date.now();
+      const last = Number(socket.data.lastPreview ?? 0);
+      if (now - last < MIN_PREVIEW_INTERVAL_MS) return;
+      socket.data.lastPreview = now;
+
+      // Editors only. Another overlay has its own camera and no use for this.
+      io.to(board.editorsRoom).emit("camera:frame", { id, frame });
+    });
+
+    board.overlays += 1;
+    announcePresence(board);
+
+    socket.on("disconnect", () => {
+      board.overlays = Math.max(0, board.overlays - 1);
+      announcePresence(board);
+    });
+    return;
+  }
+
   if (role !== "editor") return;
 
   const userId = socket.data.userId as string;
@@ -1156,6 +1303,20 @@ io.on("connection", (socket) => {
   announceHistory(board, userId);
 
   socket.join(board.editorsRoom);
+
+  // Overlays listen for this and only send camera previews while somebody is
+  // actually looking at the board.
+  board.watchers += 1;
+  announcePresence(board);
+
+  /**
+   * Tells every OBS source on this board to reload itself. Any editor may: it's
+   * the same thing as walking over and pressing Refresh, and the people who can
+   * already clear the board are hardly held back by it.
+   */
+  socket.on("overlay:reload", () => {
+    io.to(board.room).emit("overlay:reload");
+  });
   socket.emit("layouts:state", layoutSummaries(board));
 
   socket.emit("overlay:key", { key: board.overlayKey });
@@ -1211,7 +1372,11 @@ io.on("connection", (socket) => {
     const shape =
       kind === "shape"
         ? readShape(data?.shape)
-        : kind === "filter"
+        : kind === "collider"
+          ? (COLLIDER_SHAPES.includes(String(data?.shape ?? "")) &&
+              String(data?.shape)) ||
+            "rect"
+          : kind === "filter"
           ? // A filter's region reuses the shape vocabulary, narrowed to the
             // shapes that enclose an area, and falls back to a rectangle.
             (FILTER_SHAPES.includes(String(data?.shape ?? "")) &&
@@ -1220,7 +1385,8 @@ io.on("connection", (socket) => {
           : "";
     if (kind === "shape" && !shape) return;
 
-    const filter = kind === "filter" ? readFilter(data?.filter) : "";
+    const filter =
+      kind === "filter" ? readFilter(data?.filter, data?.strength) : "";
     if (kind === "filter" && !filter) return;
 
     // Refused rather than evicting, like an embed: the limit is about the
@@ -1274,6 +1440,11 @@ io.on("connection", (socket) => {
       // A plain name to match on, never a path or a url — the overlay only
       // compares it against what its own machine reports.
       device: kind === "camera" ? cleanText(data?.device).slice(0, 80) : "",
+      pinned:
+        alwaysPinned(kind) ||
+        (typeof data?.pinned === "boolean"
+          ? data.pinned
+          : pinnedByDefault(kind)),
       color: cleanColour(data?.color),
       name: (kind === "text" ? text : String(data?.name ?? "")).slice(0, 64),
       x: clampFraction(data?.x),
@@ -1421,7 +1592,9 @@ io.on("connection", (socket) => {
     const item = items.get(String(data?.id ?? ""));
     // Text and shapes: the two kinds whose appearance is stored rather than
     // fetched. An emote's id and an image's src are what those items *are*.
-    if (!item || (item.kind !== "text" && item.kind !== "shape")) return;
+    const editable =
+      item?.kind === "text" || item?.kind === "shape" || item?.kind === "filter";
+    if (!item || !editable) return;
 
     // A shape has no words, so its own text is what it keeps.
     const text = item.kind === "text" ? cleanText(data?.text) : item.text;
@@ -1431,12 +1604,23 @@ io.on("connection", (socket) => {
     if (item.kind === "text" && !text) return;
 
     const color = cleanColour(data?.color);
-    if (text === item.text && color === item.color) return;
+
+    // A filter keeps whatever chain it has unless this edit carries one, and a
+    // chain that validates to nothing would blank the item invisibly.
+    const filter =
+      item.kind === "filter"
+        ? readFilter(data?.filter, data?.strength) || item.filter
+        : item.filter;
+
+    if (text === item.text && color === item.color && filter === item.filter) {
+      return;
+    }
 
     const before = snapshotEdit(item);
 
     item.text = text;
     item.color = color;
+    item.filter = filter;
     // For a text item the name has always been the text itself, and it's what
     // the tooltip shows. A shape keeps the name it was placed with.
     if (item.kind === "text") item.name = text;
@@ -1534,6 +1718,34 @@ io.on("connection", (socket) => {
     io.to(board.room).emit("item:muted", { id: item.id, muted });
   });
 
+  /**
+   * Whether physics may move an item.
+   *
+   * Out of the undo history for the same reason mute is: it's a property of how
+   * the board behaves rather than a change to what it contains, and undoing
+   * your way back through someone's pin presses would be surprising. The fix
+   * for a mis-press is the same button.
+   */
+  socket.on("item:pin", (data) => {
+    const ids = readIds(data?.ids);
+    const pinned = data?.pinned === true;
+
+    const changed: string[] = [];
+    for (const id of ids) {
+      const item = items.get(id);
+      if (!item || item.pinned === pinned) continue;
+      if (alwaysPinned(item.kind)) continue;
+
+      item.pinned = pinned;
+      changed.push(id);
+    }
+
+    if (!changed.length) return;
+
+    board.dirty = true;
+    io.to(board.room).emit("items:pinned", { ids: changed, pinned });
+  });
+
   socket.on("item:remove", (id) => {
 
 
@@ -1620,6 +1832,9 @@ io.on("connection", (socket) => {
   socket.on("redo", () => step(board, userId, "redo"));
 
   socket.on("disconnect", () => {
+    board.watchers = Math.max(0, board.watchers - 1);
+    announcePresence(board);
+
     board.identities.delete(socket.id);
     board.positions.delete(socket.id);
     io.to(board.room).emit("user-left", socket.id);

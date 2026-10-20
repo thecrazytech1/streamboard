@@ -1,6 +1,7 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
+import { socket } from "../../utils/socket";
 import BoardLayer from "../components/BoardLayer";
 import { useBoardAccess } from "../hooks/useBoardAccess";
 import { useBoardItems } from "../hooks/useBoardItems";
@@ -41,6 +42,23 @@ export default function OverlayPage() {
     board: overlayBoard,
   });
   const { items } = useBoardItems();
+
+  /**
+   * Reloading on request, so shipping a change doesn't mean walking to the
+   * streaming machine and pressing Refresh in OBS.
+   *
+   * This reaches an overlay whose connection is alive, which is the ordinary
+   * case. A page broken badly enough to have dropped its socket still needs
+   * refreshing from OBS itself — nothing here can help with that.
+   */
+  useEffect(() => {
+    const onReload = () => window.location.reload();
+
+    socket.on("overlay:reload", onReload);
+    return () => {
+      socket.off("overlay:reload", onReload);
+    };
+  }, []);
   const viewport = useSyncExternalStore(
     subscribeToResize,
     getViewport,

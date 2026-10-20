@@ -322,11 +322,59 @@ function ShapePanel({ onPickUp }: { onPickUp: Props["onPickUp"] }) {
           </button>
         ))}
       </div>
+
+      <ColliderRow onPickUp={onPickUp} />
     </div>
   );
 }
 
 /** A small square version of the shape, drawn the same way the board draws it. */
+/**
+ * Invisible obstacles.
+ *
+ * For the things that share your screen but not your board — a now-playing
+ * widget, a chat box, a camera on its own OBS layer. Nothing renders on the
+ * overlay; items simply land on it.
+ */
+function ColliderRow({ onPickUp }: { onPickUp: Props["onPickUp"] }) {
+  return (
+    <>
+      <p className="home-label">Invisible</p>
+      <p className="text-xs opacity-60">
+        Nothing is drawn on stream — things just bounce off it. Line one up with
+        something that&apos;s on your screen but not on the board.
+      </p>
+
+      <div className="grid grid-cols-2 gap-1">
+        {(["rect", "ellipse"] as const).map((shape) => (
+          <button
+            key={shape}
+            type="button"
+            className="shape-tile"
+            title={`Invisible ${SHAPES[shape].label.toLowerCase()}`}
+            onPointerDown={(event) =>
+              onPickUp(
+                {
+                  kind: "collider",
+                  shape,
+                  aspect: shape === "rect" ? 16 / 9 : 1,
+                  name: `${SHAPES[shape].label} collider`,
+                },
+                event,
+              )
+            }
+          >
+            <span
+              className={`collider-tile${shape === "ellipse" ? " is-round" : ""}`}
+            />
+            <span className="emote-tile-name">{SHAPES[shape].label}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function ShapePreview({
   kind,
   color,

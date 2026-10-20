@@ -90,6 +90,7 @@ export function shapePreviewItem(fields: {
     filter: "",
     strength: 1,
     device: "",
+    pinned: false,
     name: "",
     x: 0,
     y: 0,

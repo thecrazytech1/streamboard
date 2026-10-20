@@ -6,7 +6,7 @@ import { emoteUrl } from "../lib/sevenTv";
 import BoardCamera from "./BoardCamera";
 import BoardShape from "./BoardShape";
 import { embedUrl } from "../lib/embeds";
-import { filterClipPath, filterCss } from "../lib/filters";
+import { chainCss, filterClipPath, parseChain } from "../lib/filters";
 import { resolveImageSrc } from "../lib/images";
 import {
   centreOf,
@@ -48,6 +48,14 @@ type Props = {
   onEditText?: (id: string) => void;
   /** Sound on or off for a placed embed. */
   onMute?: (id: string, muted: boolean) => void;
+  /** Whether physics may move these items. */
+  onPin?: (ids: string[], pinned: boolean) => void;
+  /**
+   * The start and end of a drag, for whatever is simulating. Only gravity cares
+   * — it's the difference between inferring a throw and being told about one.
+   */
+  onGrab?: (ids: string[]) => void;
+  onRelease?: (ids: string[]) => void;
 };
 
 
@@ -161,6 +169,9 @@ export default function BoardLayer({
   onRemove,
   onEditText,
   onMute,
+  onPin,
+  onGrab,
+  onRelease,
 }: Props) {
   const lastEmit = useRef(0);
 
@@ -169,6 +180,17 @@ export default function BoardLayer({
     .filter((item): item is BoardItem => item !== undefined);
 
   const bounds = readOnly ? null : selectionBounds(selected);
+
+  /*
+   * A note on the chain below: every kind is matched by name and anything
+   * unrecognised renders nothing.
+   *
+   * It used to end in an image, which meant a kind this build hadn't heard of
+   * — one added to the server since, arriving from somebody on a newer client
+   * — drew a broken-image icon with its name beside it. On the overlay, that's
+   * a broken image on stream. Rendering nothing is the only safe way to not
+   * know what something is.
+   */
 
 
 
@@ -227,7 +249,11 @@ export default function BoardLayer({
       // selection outliving a button press would make it fire twice.
       if (event.key === "F2" && ids.length === 1) {
         const only = items[ids[0]];
-        if (only?.kind === "text" || only?.kind === "shape") {
+        if (
+          only?.kind === "text" ||
+          only?.kind === "shape" ||
+          only?.kind === "filter"
+        ) {
           onEditText?.(only.id);
         }
       }
@@ -255,6 +281,7 @@ export default function BoardLayer({
     element: HTMLElement,
     pointerId: number,
     compute: (event: PointerEvent) => ItemTransform[],
+    onFinish?: () => void,
   ) => {
     element.setPointerCapture(pointerId);
 
@@ -265,6 +292,7 @@ export default function BoardLayer({
       element.removeEventListener("pointerup", onEnd);
       element.removeEventListener("pointercancel", onEnd);
       commit(compute(event), true);
+      onFinish?.();
     };
 
     element.addEventListener("pointermove", onMove);
@@ -298,20 +326,27 @@ export default function BoardLayer({
         ? selected
         : [item];
 
-    onSelect?.(dragging.map((entry) => entry.id));
+    const draggingIds = dragging.map((entry) => entry.id);
+    onSelect?.(draggingIds);
+    onGrab?.(draggingIds);
 
 
 
     const grab = screenToWorld(view, event.clientX, event.clientY);
 
-    runGesture(event.currentTarget, event.pointerId, (e) => {
-      const world = screenToWorld(view, e.clientX, e.clientY);
-      return moveTransforms(
-        dragging,
-        (world.x - grab.x) / WORLD_WIDTH,
-        (world.y - grab.y) / WORLD_HEIGHT,
-      );
-    });
+    runGesture(
+      event.currentTarget,
+      event.pointerId,
+      (e) => {
+        const world = screenToWorld(view, e.clientX, e.clientY);
+        return moveTransforms(
+          dragging,
+          (world.x - grab.x) / WORLD_WIDTH,
+          (world.y - grab.y) / WORLD_HEIGHT,
+        );
+      },
+      () => onRelease?.(draggingIds),
+    );
   };
 
   const startTransform = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -337,14 +372,24 @@ export default function BoardLayer({
 
     const startDistance = Math.max(distanceAt(event.clientX, event.clientY), 1);
     const grabbed = selected;
+    const grabbedIds = grabbed.map((item) => item.id);
 
-    runGesture(event.currentTarget, event.pointerId, (e) =>
+    // Held for the same reason a drag is: whatever is simulating must leave
+    // these alone until the gesture ends, or it reports the size the item had
+    // a frame ago and the two fight over it while you resize.
+    onGrab?.(grabbedIds);
+
+    runGesture(
+      event.currentTarget,
+      event.pointerId,
+      (e) =>
       scaleRotateTransforms(
         grabbed,
         pivot,
         e.altKey ? 1 : distanceAt(e.clientX, e.clientY) / startDistance,
         e.shiftKey ? 0 : angleAt(e.clientX, e.clientY) - startAngle,
       ),
+      () => onRelease?.(grabbedIds),
     );
   };
 
@@ -376,7 +421,12 @@ export default function BoardLayer({
     const cos = Math.cos(radians);
     const sin = Math.sin(radians);
 
-    runGesture(event.currentTarget, event.pointerId, (e) => {
+    onGrab?.([item.id]);
+
+    runGesture(
+      event.currentTarget,
+      event.pointerId,
+      (e) => {
       const world = screenToWorld(view, e.clientX, e.clientY);
       const dx = world.x - centreX;
       const dy = world.y - centreY;
@@ -388,13 +438,15 @@ export default function BoardLayer({
       // one edge, which is half the item away from the middle. The other axis
       // keeps whatever it already had.
       return [
-        resizeTransform(
-          item,
-          axis === "x" ? Math.abs(localX) * 2 : itemWidth(item),
-          axis === "y" ? Math.abs(localY) * 2 : itemHeight(item),
-        ),
-      ];
-    });
+          resizeTransform(
+            item,
+            axis === "x" ? Math.abs(localX) * 2 : itemWidth(item),
+            axis === "y" ? Math.abs(localY) * 2 : itemHeight(item),
+          ),
+        ];
+      },
+      () => onRelease?.([item.id]),
+    );
   };
 
   const topZ =
@@ -445,10 +497,24 @@ export default function BoardLayer({
               <span className="board-text">{item.text}</span>
             ) : item.kind === "embed" ? (
               <BoardEmbed item={item} interactive={!readOnly} />
+            ) : item.kind === "collider" ? (
+              // Nothing at all on the overlay: a collider exists to be bumped
+              // into, not seen. In the board it's an outline so you can find
+              // and move it.
+              readOnly ? null : (
+                <span
+                  className={`board-collider${
+                    item.shape === "ellipse" ? " is-round" : ""
+                  }`}
+                >
+                  {item.name || "Collider"}
+                </span>
+              )
             ) : item.kind === "camera" ? (
               // `readOnly` is true only on the overlay, which is exactly where
               // the camera should be opened and nowhere else.
               <BoardCamera
+                id={item.id}
                 device={item.device}
                 name={item.name}
                 live={readOnly}
@@ -462,7 +528,8 @@ export default function BoardLayer({
                   // the frame while editing. Not anything OBS puts under the
                   // browser source — the page can't see those pixels.
                   backdropFilter:
-                    filterCss(item.filter, item.strength) ?? undefined,
+                    chainCss(parseChain(item.filter, item.strength)) ??
+                    undefined,
                   clipPath: filterClipPath(item.shape),
                 }}
               />
@@ -472,8 +539,7 @@ export default function BoardLayer({
                 width={item.size}
                 height={itemHeight(item)}
               />
-            ) : (
-
+            ) : item.kind === "emote" || item.kind === "image" ? (
               <img
                 src={
                   item.kind === "emote"
@@ -483,7 +549,7 @@ export default function BoardLayer({
                 alt={item.name}
                 draggable={false}
               />
-            )}
+            ) : null}
 
             {/* One per axis, on the middle of the right and bottom edges.
                 Inside the item's own element, so they rotate and flip with it
@@ -589,14 +655,38 @@ export default function BoardLayer({
               {single.muted ? "Unmute" : "Mute"}
             </button>
           )}
-          {(single?.kind === "text" || single?.kind === "shape") && (
+          {/* Pinned items sit still while everything else falls — board
+              furniture rather than things to throw. Mixed selections pin, so
+              one press makes the whole selection consistent. */}
+          <button
+            type="button"
+            onClick={() =>
+              onPin?.(
+                selected.map((item) => item.id),
+                !selected.every((item) => item.pinned),
+              )
+            }
+            title={
+              selected.every((item) => item.pinned)
+                ? "Let physics move these again"
+                : "Keep physics from moving these"
+            }
+          >
+            {selected.every((item) => item.pinned) ? "Unpin" : "Pin"}
+          </button>
+
+          {(single?.kind === "text" ||
+            single?.kind === "shape" ||
+            single?.kind === "filter") && (
             <button
               type="button"
               onClick={() => onEditText?.(single.id)}
               title={
                 single.kind === "text"
                   ? "Edit this text  F2"
-                  : "Recolour this shape  F2"
+                  : single.kind === "filter"
+                    ? "Edit this filter  F2"
+                    : "Recolour this shape  F2"
               }
             >
               Edit

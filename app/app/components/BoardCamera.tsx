@@ -1,6 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { socket } from "../../utils/socket";
+import { useCameraPreview, usePresence } from "../hooks/useCameraPreview";
+
+/**
+ * Preview size and rate. Small and slow on purpose: this is for framing a
+ * camera on the board, not for watching it, and every frame costs the overlay
+ * a draw and a JPEG encode on a browser source that has no GPU acceleration.
+ */
+const PREVIEW_WIDTH = 160;
+const PREVIEW_FPS = 3;
+const PREVIEW_QUALITY = 0.45;
 
 /**
  * A webcam, as a board item.
@@ -15,18 +26,28 @@ import { useEffect, useRef, useState } from "react";
  * In OBS this needs the browser launched with --use-fake-ui-for-media-stream,
  * since a browser source has no way to show a permission prompt and so fails
  * closed without it.
+ *
+ * So that the board isn't editing a blank box, the overlay sends it a small
+ * picture of the feed every so often — only while somebody has the board open,
+ * and never stored anywhere. See useCameraPreview.
  */
 export default function BoardCamera({
+  id,
   device,
   name,
   live,
 }: {
+  id: string;
   device: string;
   name: string;
   live: boolean;
 }) {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const video = useRef<HTMLVideoElement>(null);
+
+  // One side sends, the other receives; neither does both.
+  const { editors } = usePresence();
+  const preview = useCameraPreview(id);
 
   useEffect(() => {
     if (!live || !navigator.mediaDevices?.getUserMedia) return;
@@ -85,12 +106,50 @@ export default function BoardCamera({
     if (video.current) video.current.srcObject = stream;
   }, [stream]);
 
+  // Sending the board a look at the feed. Nothing happens unless the camera is
+  // open here *and* somebody is on the board to see it.
+  useEffect(() => {
+    if (!live || !stream || editors === 0) return;
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const timer = setInterval(() => {
+      const source = video.current;
+      // HAVE_CURRENT_DATA: anything less and there's no frame to draw yet.
+      if (!source || source.readyState < 2 || !source.videoWidth) return;
+
+      // The camera's own proportions, not the item's — the board crops it to
+      // the item, and a squashed preview would frame it wrongly.
+      canvas.width = PREVIEW_WIDTH;
+      canvas.height = Math.max(
+        1,
+        Math.round((PREVIEW_WIDTH * source.videoHeight) / source.videoWidth),
+      );
+      context.drawImage(source, 0, 0, canvas.width, canvas.height);
+
+      socket.emit("camera:frame", {
+        id,
+        frame: canvas.toDataURL("image/jpeg", PREVIEW_QUALITY),
+      });
+    }, 1000 / PREVIEW_FPS);
+
+    return () => clearInterval(timer);
+  }, [id, live, stream, editors]);
+
   if (!live) {
-    return (
+    // A still from the overlay if one has arrived, and the explanation if not.
+    return preview ? (
+      <span className="board-camera-preview">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={preview} alt={name || "Camera"} draggable={false} />
+      </span>
+    ) : (
       <span className="board-camera-placeholder">
         {name || "Camera"}
         <small>{device ? `matching “${device}”` : "default camera"}</small>
-        <small>shown on the overlay</small>
+        <small>waiting for the overlay</small>
       </span>
     );
   }

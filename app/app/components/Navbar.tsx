@@ -30,6 +30,11 @@ type Props = {
   onOpenOverlay: () => void;
   /** Absent for anyone who can't change the board's editor list. */
   onOpenEditors?: () => void;
+  /** Starts gravity in a mode, or puts everything back if one is running. */
+  onToggleGravity: (mode: "drop" | "float") => void;
+  /** Which mode is running, or null when there's nothing to go back to. */
+  gravityActive: "drop" | "float" | null;
+  canDrop: boolean;
 };
 
 export default function Navbar({
@@ -49,6 +54,9 @@ export default function Navbar({
   layoutCount,
   onOpenOverlay,
   onOpenEditors,
+  onToggleGravity,
+  gravityActive,
+  canDrop,
 }: Props) {
   return (
     <nav className="app-navbar">
@@ -80,6 +88,34 @@ export default function Navbar({
           title="Remove every item from the board"
         >
           Clear
+        </WaButton>
+        {/* Each button is its own way back: whichever is running remembers
+            where everything was, and pressing it again restores that. */}
+        <WaButton
+          size="small"
+          appearance={gravityActive === "drop" ? "filled" : "plain"}
+          disabled={!canDrop && !gravityActive}
+          onClick={() => onToggleGravity("drop")}
+          title={
+            gravityActive
+              ? "Put everything back where it was  G"
+              : "Drop everything under gravity  G"
+          }
+        >
+          {gravityActive === "drop" ? "Put back" : "Drop"}
+        </WaButton>
+        <WaButton
+          size="small"
+          appearance={gravityActive === "float" ? "filled" : "plain"}
+          disabled={!canDrop && !gravityActive}
+          onClick={() => onToggleGravity("float")}
+          title={
+            gravityActive
+              ? "Put everything back where it was  F"
+              : "Set everything bouncing around the frame  F"
+          }
+        >
+          {gravityActive === "float" ? "Put back" : "Float"}
         </WaButton>
       </div>
 

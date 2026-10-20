@@ -7,27 +7,39 @@ import {
   WaInput,
 } from "@awesome.me/webawesome/dist/react";
 import { MAX_TEXT_LENGTH, TEXT_COLOURS } from "../lib/text";
+import {
+  FILTER_KINDS,
+  FILTERS,
+  MAX_FILTER_CHAIN,
+  parseChain,
+  serialiseChain,
+  type FilterKind,
+  type FilterStep,
+} from "../lib/filters";
 import type { BoardItem } from "@/types/board";
 
 type Props = {
-  /** The text item being edited, or null when the dialog is closed. */
+  /** The item being edited, or null when the dialog is closed. */
   item: BoardItem | null;
   onClose: () => void;
-  onSave: (id: string, text: string, color: string) => void;
+  onSave: (
+    id: string,
+    changes: { text: string; color: string; filter: string },
+  ) => void;
 };
 
 /**
- * Changing a placed item's appearance: the words on a text item, and the colour
- * of either a text item or a shape. Those are the only two kinds whose look is
- * stored on the item rather than fetched from somewhere.
+ * Changing a placed item's appearance: the words on a text item, the colour of
+ * a text item or a shape, and the chain of effects on a filter. Those are the
+ * kinds whose look is stored on the item rather than fetched from somewhere.
  *
  * The draft lives here rather than on the item, and one save sends one event —
- * so nobody watching the board (or the stream) sees it typed out a character at
- * a time, and undo steps over the whole edit rather than each keystroke.
+ * so nobody watching the board (or the stream) sees it edited keystroke by
+ * keystroke, and undo steps over the whole change.
  */
-type Draft = { id: string; text: string; color: string };
+type Draft = { id: string; text: string; color: string; chain: FilterStep[] };
 
-export default function TextEditor({ item, onClose, onSave }: Props) {
+export default function ItemEditor({ item, onClose, onSave }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
 
   /**
@@ -39,11 +51,20 @@ export default function TextEditor({ item, onClose, onSave }: Props) {
   const editing = item && draft?.id === item.id ? draft : null;
   const text = editing?.text ?? item?.text ?? "";
   const color = editing?.color ?? item?.color ?? TEXT_COLOURS[0];
+  const chain =
+    editing?.chain ?? (item ? parseChain(item.filter, item.strength) : []);
 
   const edit = (changes: Partial<Omit<Draft, "id">>) => {
     if (!item) return;
-    setDraft({ id: item.id, text, color, ...changes });
+    setDraft({ id: item.id, text, color, chain, ...changes });
   };
+
+  const setStep = (index: number, step: Partial<FilterStep>) =>
+    edit({
+      chain: chain.map((existing, at) =>
+        at === index ? { ...existing, ...step } : existing,
+      ),
+    });
 
   // Dropped on the way out, so reopening reads the item again rather than
   // restoring a draft that was abandoned.
@@ -53,6 +74,7 @@ export default function TextEditor({ item, onClose, onSave }: Props) {
   };
 
   const isText = item?.kind === "text";
+  const isFilter = item?.kind === "filter";
   const trimmed = text.trim().slice(0, MAX_TEXT_LENGTH);
   // An empty text item would be invisible on the board, and clearing the box is
   // not how you delete something — so saving stays disabled instead. A shape
@@ -61,14 +83,18 @@ export default function TextEditor({ item, onClose, onSave }: Props) {
 
   const save = () => {
     if (!item || !canSave) return;
-    onSave(item.id, trimmed, color);
+    onSave(item.id, {
+      text: trimmed,
+      color,
+      filter: serialiseChain(chain),
+    });
     close();
   };
 
   return (
     <WaDialog
       className="text-editor"
-      label={isText ? "Edit text" : "Recolour"}
+      label={isText ? "Edit text" : isFilter ? "Edit filter" : "Recolour"}
       open={item !== null}
       onWaHide={close}
       lightDismiss
@@ -86,7 +112,78 @@ export default function TextEditor({ item, onClose, onSave }: Props) {
         />
       )}
 
-      <div className="text-editor-swatches">
+      {isFilter && (
+        <>
+          <p className="text-sm">
+            Effects apply in order, in one pass over whatever is underneath.
+          </p>
+
+          {chain.length === 0 && (
+            <p className="py-2 text-sm opacity-60">
+              Nothing here yet — add an effect below.
+            </p>
+          )}
+
+          {chain.map((step, index) => (
+            <div className="filter-step" key={`${step.kind}-${index}`}>
+              <div className="filter-step-head">
+                <span className="filter-step-name">
+                  {FILTERS[step.kind].label}
+                </span>
+                <span className="filter-step-amount">
+                  {Math.round(step.strength * 100)}%
+                </span>
+                <WaButton
+                  size="small"
+                  appearance="plain"
+                  variant="danger"
+                  onClick={() =>
+                    edit({ chain: chain.filter((_, at) => at !== index) })
+                  }
+                >
+                  Remove
+                </WaButton>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(step.strength * 100)}
+                onChange={(event) =>
+                  setStep(index, {
+                    strength: Number(event.target.value) / 100,
+                  })
+                }
+              />
+            </div>
+          ))}
+
+          {chain.length < MAX_FILTER_CHAIN && (
+            <div className="filter-add">
+              {FILTER_KINDS.map((kind: FilterKind) => (
+                <WaButton
+                  key={kind}
+                  size="small"
+                  appearance="outlined"
+                  title={FILTERS[kind].hint}
+                  onClick={() =>
+                    edit({
+                      chain: [
+                        ...chain,
+                        { kind, strength: FILTERS[kind].strength },
+                      ],
+                    })
+                  }
+                >
+                  + {FILTERS[kind].label}
+                </WaButton>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="text-editor-swatches" hidden={isFilter}>
         {TEXT_COLOURS.map((swatch) => (
           <button
             key={swatch}

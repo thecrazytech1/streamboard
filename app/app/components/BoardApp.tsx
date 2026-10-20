@@ -17,22 +17,25 @@ import LayoutManager from "./LayoutManager";
 import Navbar from "./Navbar";
 import EditorManager from "./EditorManager";
 import OverlaySetup from "./OverlaySetup";
-import TextEditor from "./TextEditor";
+import ItemEditor from "./ItemEditor";
 import TwitchPlayer from "./TwitchPlayer";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { useBoardItems } from "../hooks/useBoardItems";
 import { useBoardHistory } from "../hooks/useBoardHistory";
 import { useBoardLayouts } from "../hooks/useBoardLayouts";
 import { useBoardEditors } from "../hooks/useBoardEditors";
+import { useGravity } from "../hooks/useGravity";
+import { usePresence } from "../hooks/useCameraPreview";
 import { useOverlayLink } from "../hooks/useOverlayLink";
 import { usePasteToBoard } from "../hooks/usePasteToBoard";
 import { emoteUrl } from "../lib/sevenTv";
 import { resolveImageSrc } from "../lib/images";
 import { itemBounds, overlaps, type Rect } from "../lib/selection";
-import { filterClipPath, filterCss } from "../lib/filters";
+import { chainCss, filterClipPath, parseChain } from "../lib/filters";
 import { shapePreviewItem } from "../lib/shapes";
 import { CLIENT_ID, type TwitchChannel } from "../lib/twitch";
 import {
+  isOnStream,
   screenToWorld,
   screenToFraction,
   WORLD_HEIGHT,
@@ -82,6 +85,9 @@ const dropSize = (item: DraggableItem): number => {
   // shape — a quarter of the frame rather than a fifth.
   if (item.kind === "filter") return 320;
   if (item.kind === "shape") return SHAPE_SIZE;
+  // A collider usually stands in for a widget on the stream, which tend to be
+  // wider than a shape you'd draw.
+  if (item.kind === "collider") return 360;
   return item.kind === "image" ? IMAGE_SIZE : EMOTE_SIZE;
 };
 
@@ -130,6 +136,17 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   
   const overlayLink = useOverlayLink(board);
+  /** Who else is here; the OBS dialog reports whether anything is on stream. */
+  const presence = usePresence();
+
+  /**
+   * Gravity. Falling items are ordinary transforms, so this rides the same path
+   * a drag does — applied locally for feel, broadcast, clamped by the server.
+   */
+  const gravity = useGravity({
+    items: boardItems,
+    onTransforms: applyTransforms,
+  });
 
   const openDrawer = () => {
     setPickerRevision((revision) => revision + 1);
@@ -242,6 +259,27 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
     return () => clearTimeout(timer);
   }, [itemError]);
 
+  // G drops, F sets things bouncing — on everything inside the stream frame,
+  // whatever is selected. Either puts it all back on a second press. Bound here
+  // rather than in the board layer, which only listens while something is
+  // already selected.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if (key !== "g" && key !== "f") return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, wa-input")) return;
+
+      event.preventDefault();
+      gravity.toggle(key === "f" ? "float" : "drop");
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [gravity]);
+
   useEffect(() => {
     const handleMove = (e: PointerEvent) => {
       socket.emit("cursor", {
@@ -279,7 +317,11 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
             ? item.color
             : "#ffffff",
         shape:
-          item.kind === "shape" || item.kind === "filter" ? item.shape : "",
+          item.kind === "shape" ||
+          item.kind === "filter" ||
+          item.kind === "collider"
+            ? item.shape
+            : "",
         outline: item.kind === "shape" ? item.outline : false,
         device: item.kind === "camera" ? item.device : "",
         filter: item.kind === "filter" ? item.filter : "",
@@ -363,12 +405,20 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
    * the board to keep in step until the server's echo arrives — and it also
    * clamps and cleans the text, so its version is the one to render.
    */
-  const handleSaveText = useCallback(
-    (id: string, text: string, color: string) => {
-      socket.emit("item:edit", { id, text, color });
+  const handleSaveItem = useCallback(
+    (
+      id: string,
+      changes: { text: string; color: string; filter: string },
+    ) => {
+      socket.emit("item:edit", { id, ...changes });
     },
     [],
   );
+
+  const handlePin = useCallback((ids: string[], pinned: boolean) => {
+    if (ids.length === 0) return;
+    socket.emit("item:pin", { ids, pinned });
+  }, []);
 
   const handleMute = useCallback((id: string, muted: boolean) => {
     socket.emit("item:mute", { id, muted });
@@ -548,6 +598,11 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         onOpenEditors={
           editors.canInvite ? () => setEditorsOpen(true) : undefined
         }
+        onToggleGravity={(mode) => gravity.toggle(mode)}
+        gravityActive={gravity.active}
+        // Only what's on stream takes part, so an empty frame means nothing to
+        // drop however full the staging area is.
+        canDrop={Object.values(boardItems).some((item) => isOnStream(item))}
       />
 
       <div
@@ -577,6 +632,9 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
             onRemove={handleRemoveItems}
             onEditText={setEditingId}
             onMute={handleMute}
+            onPin={handlePin}
+            onGrab={gravity.grab}
+            onRelease={gravity.release}
           />
         </div>
       </div>
@@ -662,10 +720,10 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         onDelete={layouts.remove}
       />
 
-      <TextEditor
+      <ItemEditor
         item={editingId ? (boardItems[editingId] ?? null) : null}
         onClose={() => setEditingId(null)}
-        onSave={handleSaveText}
+        onSave={handleSaveItem}
       />
 
       <EditorManager
@@ -687,6 +745,8 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
         onClose={() => setOverlayOpen(false)}
         channelName={channel.name}
         link={overlayLink}
+        overlays={presence.overlays}
+        onReload={() => socket.emit("overlay:reload")}
       />
 
       <WaDialog
@@ -754,7 +814,8 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
             // Filtering live while it's dragged, so you can see what it catches
             // before letting go.
             backdropFilter:
-              filterCss(carried.filter, carried.strength) ?? undefined,
+              chainCss(parseChain(carried.filter, carried.strength)) ??
+              undefined,
             clipPath: filterClipPath(carried.shape),
           }}
         />
@@ -781,6 +842,22 @@ export default function BoardApp({ channel, board, token, onLogout }: Props) {
             width={dropSize(carried)}
             height={dropSize(carried) / carried.aspect}
           />
+        </span>
+      )}
+
+      {carried && ghost && carried.kind === "collider" && (
+        <span
+          className={`item-ghost board-collider${
+            carried.shape === "ellipse" ? " is-round" : ""
+          }`}
+          style={{
+            left: ghost.x,
+            top: ghost.y,
+            width: dropSize(carried) * view.zoom,
+            height: (dropSize(carried) / carried.aspect) * view.zoom,
+          }}
+        >
+          {carried.name}
         </span>
       )}
 

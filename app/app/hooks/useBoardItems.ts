@@ -61,7 +61,7 @@ export function useBoardItems() {
         if (touched.length === 0) return prev;
 
         const next = { ...prev };
-        for (const { id, text, color } of touched) {
+        for (const { id, text, color, filter } of touched) {
           const item = next[id];
           // `name` tracks the text for a text item — it's what the tooltip and
           // the toolbar read, and the server keeps them in step too. A shape,
@@ -69,7 +69,9 @@ export function useBoardItems() {
           next[id] =
             item.kind === "text"
               ? { ...item, text, color, name: text }
-              : { ...item, color };
+              : item.kind === "filter"
+                ? { ...item, color, filter }
+                : { ...item, color };
         }
         return next;
       });
@@ -79,6 +81,17 @@ export function useBoardItems() {
       setItems((prev) =>
         prev[id] ? { ...prev, [id]: { ...prev[id], muted } } : prev,
       );
+    };
+
+    const onPinned = ({ ids, pinned }: { ids: string[]; pinned: boolean }) => {
+      setItems((prev) => {
+        const touched = (ids ?? []).filter((id) => prev[id]);
+        if (touched.length === 0) return prev;
+
+        const next = { ...prev };
+        for (const id of touched) next[id] = { ...next[id], pinned };
+        return next;
+      });
     };
 
     const onRemoved = (id: string) => {
@@ -106,6 +119,7 @@ export function useBoardItems() {
     socket.on("items:reordered", onBatchReordered);
     socket.on("items:edited", onEdited);
     socket.on("item:muted", onMuted);
+    socket.on("items:pinned", onPinned);
     socket.on("item:removed", onRemoved);
     socket.on("items:removed", onBatchRemoved);
 
@@ -118,6 +132,7 @@ export function useBoardItems() {
       socket.off("items:reordered", onBatchReordered);
       socket.off("items:edited", onEdited);
       socket.off("item:muted", onMuted);
+      socket.off("items:pinned", onPinned);
       socket.off("item:removed", onRemoved);
       socket.off("items:removed", onBatchRemoved);
     };
